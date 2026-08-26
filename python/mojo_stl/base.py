@@ -7,7 +7,7 @@ import math
 
 import numpy as np
 
-from ._lib import mass_integrals, unit_normals, update_normals
+from ._lib import MASS_PARALLEL_THRESHOLD, mass_integrals, unit_normals, update_geometry, update_normals
 
 AREA_SIZE_THRESHOLD = 0
 VECTORS = DIMENSIONS = 3
@@ -121,6 +121,13 @@ class BaseMesh:
         return data[np.sort(idx[diff_a])] if len(filtered) <= len(data) / 2 else data[np.sort(idx[np.concatenate((diff, [False]))])]
 
     def update_normals(self, update_areas=True, update_centroids=True):
+        if update_areas and update_centroids:
+            areas = np.empty((len(self), 1), dtype=np.float32)
+            centroids = np.empty((len(self), 3), dtype=np.float32)
+            update_geometry(self.data, areas, centroids)
+            self.areas = areas
+            self.centroids = centroids
+            return
         update_normals(self.data)
         if update_areas:
             self.update_areas(self.normals)
@@ -183,24 +190,25 @@ class BaseMesh:
             edges[2] = self.vectors[:, (2, 0)]
             edges[:, reversed_triangles] = edges[:, reversed_triangles, ::-1]
             directed = edges.reshape(3 * n, 6)
-            if len(np.unique(directed, axis=0)) != 3 * n:
+            directed[directed == 0] = 0
+            packed = directed.view(np.dtype((np.void, 24))).ravel()
+            if len(np.unique(packed)) != 3 * n:
                 return False
-            undirected = directed.copy()
-            left, right = undirected[:, :3], undirected[:, 3:]
+            left, right = directed[:, :3], directed[:, 3:]
             reverse = ((left[:, 0] > right[:, 0]) |
                        ((left[:, 0] == right[:, 0]) & (left[:, 1] > right[:, 1])) |
                        ((left[:, 0] == right[:, 0]) & (left[:, 1] == right[:, 1]) & (left[:, 2] > right[:, 2])))
-            undirected[reverse] = undirected[reverse][:, (3, 4, 5, 0, 1, 2)]
-            return 3 * n == 2 * len(np.unique(undirected, axis=0))
+            directed[reverse] = directed[reverse][:, (3, 4, 5, 0, 1, 2)]
+            return 3 * n == 2 * len(np.unique(packed))
         allowed = np.abs(self.normals).sum(axis=0) * np.finfo(np.float32).eps
         return bool((np.abs(self.normals.sum(axis=0)) <= allowed).all())
 
     is_closed = check
 
     def _integrals(self):
-        value = np.empty(10, dtype=np.float64)
+        value = np.empty(80 if len(self) >= MASS_PARALLEL_THRESHOLD else 10, dtype=np.float64)
         mass_integrals(self.data, value)
-        return value
+        return value[:10]
 
     def get_mass_properties(self):
         self.check(True)

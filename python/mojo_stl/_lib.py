@@ -11,9 +11,11 @@ import numpy as np
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 LIB = os.environ.get("MOJO_STL_LIB") or os.path.join(ROOT, "dist", "libmojo-numpy-stl.so")
 I = ctypes.c_int64
+MASS_PARALLEL_THRESHOLD = 1_000_000
 
 _SIGNATURES = {
     "mnst_update_normals": ([I, I], None),
+    "mnst_update_geometry": ([I, I, I, I], None),
     "mnst_unit_normals": ([I, I, I], None),
     "mnst_mass_integrals": ([I, I, I], None),
 }
@@ -69,6 +71,19 @@ def update_normals(data: np.ndarray) -> None:
     lib().mnst_update_normals(_address(data, writable=True), len(data))
 
 
+def update_geometry(data: np.ndarray, areas: np.ndarray, centroids: np.ndarray) -> None:
+    if (data.ndim != 1 or areas.shape != (len(data), 1) or
+            centroids.shape != (len(data), 3) or
+            areas.dtype != np.dtype("<f4") or centroids.dtype != np.dtype("<f4")):
+        raise ValueError("invalid geometry kernel buffers")
+    if not len(data):
+        return
+    lib().mnst_update_geometry(
+        _address(data, writable=True), len(data),
+        _address(areas, writable=True), _address(centroids, writable=True),
+    )
+
+
 def unit_normals(data: np.ndarray, result: np.ndarray) -> None:
     if data.ndim != 1 or result.shape != (len(data), 3) or result.dtype != np.dtype("<f4"):
         raise ValueError("invalid unit-normal kernel buffers")
@@ -78,7 +93,8 @@ def unit_normals(data: np.ndarray, result: np.ndarray) -> None:
 
 
 def mass_integrals(data: np.ndarray, result: np.ndarray) -> None:
-    if data.ndim != 1 or result.shape != (10,) or result.dtype != np.dtype("<f8"):
+    required = 80 if len(data) >= MASS_PARALLEL_THRESHOLD else 10
+    if data.ndim != 1 or result.shape != (required,) or result.dtype != np.dtype("<f8"):
         raise ValueError("invalid mass-integral kernel buffers")
     if not len(data):
         result.fill(0)

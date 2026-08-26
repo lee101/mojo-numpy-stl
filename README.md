@@ -56,8 +56,11 @@ three float32 normal values, nine float32 vertex values, then one uint16 STL
 attribute. This means normal updates operate in place without converting the
 facet buffer. Binary serialization remains a direct write of that interoperable
 NumPy layout; ASCII serialization is a small standards-compatible Python layer.
-The mass kernel accumulates the ten Geometric Tools polyhedral integrals in
-float64, and Python applies the final centre-of-gravity shift to inertia.
+The normal kernel fuses normal, area, and centroid output in one pass. The mass
+kernel accumulates the ten Geometric Tools polyhedral integrals in float64 SIMD
+lanes, and Python applies the final centre-of-gravity shift to inertia. Both
+kernels switch to eight CPU workers at one million facets; smaller meshes stay
+serial to avoid thread-launch overhead.
 
 ## Benchmarks
 
@@ -66,12 +69,16 @@ using numpy-stl 3.2.0 and the pinned Mojo nightly:
 
 | kernel | mojo-numpy-stl | numpy-stl | speedup |
 | --- | ---: | ---: | ---: |
-| `update_normals`, 200k facets | 14.92 ms | 26.05 ms | 1.75x |
-| `get_unit_normals`, 200k facets | 1.06 ms | 16.65 ms | 15.75x |
-| `get_mass_properties`, 49,992 closed facets | 357.32 ms | 921.33 ms | 2.58x |
+| `update_normals`, 200k facets | 1.53 ms | 24.83 ms | 16.19x |
+| `get_unit_normals`, 200k facets | 1.01 ms | 15.99 ms | 15.90x |
+| `get_mass_properties`, 49,992 closed facets | 100.77 ms | 892.34 ms | 8.86x |
 
 Mass-property calls retain numpy-stl's signed-integral calculation and run its
-exact closed-surface check. The result of that upstream-compatible check is
-informational, as it is in numpy-stl. There is no GPU path.
+exact closed-surface check using packed 24-byte edge keys. The result of that
+upstream-compatible check is informational, as it is in numpy-stl. There is no
+GPU path: normals are memory-bound, and the float64 integral pass takes under
+one millisecond at benchmark size while the required topology check dominates.
+Including host/device transfer leaves no end-to-end kernel with enough effective
+arithmetic intensity for a GPU path that wins.
 
 MIT.

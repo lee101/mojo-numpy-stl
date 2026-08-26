@@ -43,6 +43,44 @@ def test_mojo_normals_match_numpy_stl_on_random_facets():
     assert np.allclose(ours.get_unit_normals(), reference.get_unit_normals(), rtol=1e-6, atol=1e-6)
 
 
+def test_simd_mass_tail_matches_numpy_stl():
+    data = np.concatenate((cube_data(), cube_data()[:1]))
+    ours = mesh.Mesh(data.copy())
+    reference = upstream_mesh.Mesh(data.copy())
+    got = ours.get_mass_properties()
+    expected = reference.get_mass_properties()
+    assert got[0] == pytest.approx(expected[0])
+    assert got[1] == pytest.approx(expected[1])
+    assert got[2] == pytest.approx(expected[2])
+
+
+def test_parallel_threshold_geometry_and_mass_reduction():
+    n = 1_000_003
+    base = cube_data()
+    data = np.resize(base, n)
+    ours = mesh.Mesh(data, calculate_normals=False)
+    ours.update_normals()
+
+    expected = upstream_mesh.Mesh(base.copy())
+    probes = np.concatenate((
+        np.arange(24),
+        np.arange(n // 8 - 2, n // 8 + 3),
+        np.arange(n // 2 - 2, n // 2 + 3),
+        np.arange(n - 24, n),
+    ))
+    faces = probes % len(base)
+    assert np.allclose(ours.normals[probes], expected.normals[faces], rtol=1e-6, atol=1e-6)
+    assert np.allclose(ours.areas[probes], expected.areas[faces], rtol=1e-6, atol=1e-6)
+    assert np.allclose(ours.centroids[probes], expected.centroids[faces], rtol=1e-6, atol=1e-6)
+
+    repeats, tail = divmod(n, len(base))
+    base_integrals = mesh.Mesh(base.copy())._integrals()
+    tail_integrals = mesh.Mesh(base[:tail].copy())._integrals()
+    assert ours._integrals() == pytest.approx(
+        repeats * base_integrals + tail_integrals, rel=1e-12, abs=1e-12
+    )
+
+
 def test_native_boundary_rejects_dtype_narrowing_and_handles_empty_data():
     with pytest.raises(TypeError, match="Mesh.dtype"):
         mesh.Mesh(np.zeros((1, 12), dtype=np.float64), calculate_normals=False)
@@ -93,6 +131,17 @@ def test_exact_closed_surface_check_matches_numpy_stl():
     open_data = data[:-1]
     ours = mesh.Mesh(open_data.copy())
     reference = upstream_mesh.Mesh(open_data.copy())
+    assert ours.check(exact=True) == reference.is_closed(exact=True)
+
+    duplicate = np.concatenate((data, data[:1]))
+    ours = mesh.Mesh(duplicate.copy())
+    reference = upstream_mesh.Mesh(duplicate.copy())
+    assert ours.check(exact=True) == reference.is_closed(exact=True)
+
+    signed_zero = data.copy()
+    signed_zero["vectors"][signed_zero["vectors"] == 0] = -0.0
+    ours = mesh.Mesh(signed_zero.copy())
+    reference = upstream_mesh.Mesh(signed_zero.copy())
     assert ours.check(exact=True) == reference.is_closed(exact=True)
 
 
